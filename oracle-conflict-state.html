@@ -300,9 +300,73 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--
 
 /* Canvas arc depth: handled in JS */
 
+
+/* ═══════════ FRACTURED ARC / JITTER ══════════════ */
+@keyframes jitter {
+  0%   { transform: translate(0,0) }
+  25%  { transform: translate(1.5px, -1px) }
+  50%  { transform: translate(-1px, 1.5px) }
+  75%  { transform: translate(1px, 1px) }
+  100% { transform: translate(0,0) }
+}
+
+/* SVG turbulence fracture filter (applied to canvas overlay during tension) */
+#fracture-svg { position:absolute;width:0;height:0;pointer-events:none }
+
+/* Fractured hub jitter during tension phase */
+.hub.cm { animation: hConf 1.2s ease-in-out infinite, jitter .09s infinite }
+
+/* Fractured arc: cards in conflict mode get a crack-shimmer overlay */
+.qc.lit::after {
+  animation: crackShimmer 2.5s ease-in-out infinite;
+}
+@keyframes crackShimmer {
+  0%,100% { opacity:.18; transform: scaleX(.95) }
+  50%     { opacity:.35; transform: scaleX(1.02) }
+}
+
+/* Tension flash on hub background */
+.hub.cm::before {
+  content:'';
+  position:absolute;inset:0;border-radius:50%;
+  background:radial-gradient(circle, rgba(217,80,80,.18), transparent 70%);
+  animation: tensionPulse .6s ease-in-out infinite alternate;
+  pointer-events:none;z-index:0;
+}
+@keyframes tensionPulse {
+  from { opacity:.5; transform:scale(.92) }
+  to   { opacity:1;  transform:scale(1.08) }
+}
+
+/* Phase indicator stripe on verdict card during tension */
+.verdict-card::before {
+  content:'';
+  position:absolute;top:0;left:0;right:0;height:2px;border-radius:var(--r-xl) var(--r-xl) 0 0;
+  background:linear-gradient(90deg, transparent, var(--amber), transparent);
+  opacity:0;transition:opacity .4s;
+}
+.verdict-card:not(.ac)::before { opacity:1; animation: scanLine 2s linear infinite }
+.verdict-card.ac::before { background:linear-gradient(90deg, transparent, var(--green), transparent); opacity:1; animation: scanLine 2s linear infinite }
+@keyframes scanLine {
+  0%   { background-position: -100% 0 }
+  100% { background-position: 200% 0 }
+}
+
 </style>
 </head>
 <body>
+<svg id="fracture-svg" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="fracture-noise" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" seed="2" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="8" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="fracture-hard" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="turbulence" baseFrequency="0.9" numOctaves="2" seed="5" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="14" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+</svg>
 <div class="app">
   <header class="topbar">
     <div class="logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
@@ -451,6 +515,120 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--
 </div>
 
 <script>
+
+// ═══════════════════════════════════════════════════════
+// ORACLE CONTROLLER — Phase 1–3 Conflict Engine
+// ═══════════════════════════════════════════════════════
+const OracleController = {
+  state: {
+    baseScore: 0.89,
+    remixScore: null,
+    mode: 'idle',  // 'idle' | 'tension' | 'conflict' | 'amplified' | 'merged'
+    deltaHistory: [],
+    oracleConfidence: 1.0,
+  },
+
+  // ── Phase transition map ──────────────────────────────
+  phases: {
+    idle:      { badge:'Idle',             badgeCls:'',           hubMode:'' },
+    tension:   { badge:'⚡ Tension',        badgeCls:'conflict',   hubMode:'cm' },
+    conflict:  { badge:'⚡ Conflict',       badgeCls:'conflict',   hubMode:'cm' },
+    amplified: { badge:'⚡ Amplified',      badgeCls:'amplified',  hubMode:'am' },
+    merged:    { badge:'⚡ Merged Signal',  badgeCls:'amplified',  hubMode:'am' },
+  },
+
+  setMode(m) {
+    this.state.mode = m;
+    const p = this.phases[m];
+    const hub = document.getElementById('hub');
+    const badge = document.getElementById('phaseBadge');
+    hub.className = 'hub' + (p.hubMode ? ' ' + p.hubMode : '');
+    badge.className = 'badge' + (p.badgeCls ? ' ' + p.badgeCls : '');
+    badge.textContent = p.badge;
+    // Drive fracture canvas flag
+    fractureModeActive = (m === 'tension' || m === 'conflict');
+    fractureSeverity   = (m === 'tension') ? 0.4 : (m === 'conflict') ? 1.0 : 0;
+  },
+
+  // ── Phase 1: Tension Flash ─────────────────────────────
+  triggerRemix(remixScore, isStronger = false) {
+    if (running) return;
+    this.state.remixScore = remixScore;
+    this.state.mode = 'idle';
+
+    // Phase 1 — Tension (short flash before adjudication)
+    this.setMode('tension');
+    implode();
+
+    setTimeout(() => {
+      // Phase 2 — Full conflict / amplified
+      this.setMode(isStronger ? 'amplified' : 'conflict');
+      this.showVerdict(isStronger);
+    }, 1200); // Simulated DeepThink delay
+  },
+
+  // ── Phase 2: Adjudicated verdict UI ──────────────────
+  showVerdict(isStronger) {
+    const vw = document.getElementById('verdictWrap');
+    const vc = document.getElementById('verdictCard');
+    vc.className = 'verdict-card' + (isStronger ? ' ac' : '');
+    document.getElementById('verdHead').className = 'verdict-head' + (isStronger ? ' a' : '');
+    document.getElementById('verdHead').textContent = isStronger
+      ? '⚡ Signal Amplified: Stronger Remix Found'
+      : '⚡ Conflict Detected: Reasoning Weakened';
+    this.updateRadarDiff(this.state.baseScore, this.state.remixScore, isStronger);
+    vw.className = 'verdict-wrap show';
+  },
+
+  // ── Phase 3: Radar diff with delta calculation ────────
+  updateRadarDiff(oldS, newS, isStronger) {
+    const delta = ((newS - oldS) / oldS * 100).toFixed(0);
+
+    // Record to delta history (Oracle training data flywheel)
+    this.state.deltaHistory.push({ ts: Date.now(), base: oldS, remix: newS, delta, isStronger });
+    this.state.oracleConfidence = Math.min(1, 0.6 + this.state.deltaHistory.length * 0.05);
+
+    // Score display
+    document.getElementById('oldSc').textContent = oldS.toFixed(2);
+    document.getElementById('newSc').style.color = isStronger ? 'var(--green)' : 'var(--red)';
+    document.getElementById('newSc').textContent = newS.toFixed(2);
+    document.getElementById('arrIcon').textContent = isStronger ? '↑' : '→';
+
+    if (isStronger) {
+      document.getElementById('vHold').style.display = 'none';
+      document.getElementById('vAccept').style.display = '';
+      document.getElementById('vAccept').textContent = `Accept Stronger Signal (${newS.toFixed(2)}) ↑`;
+      document.getElementById('vAccept').className = 'vbtn amp-acc';
+      document.getElementById('vMerge').style.display = 'none';
+      setRadarBars([
+        ['rd1','p','+12%','bn1','pb',97,'bo1',85],
+        ['rd2','p','+18%','bn2','pb',96,'bo2',81],
+        ['rd3','p','+8%','bn3','pb',92,'bo3',85]
+      ]);
+    } else {
+      document.getElementById('vHold').style.display = '';
+      document.getElementById('vHold').textContent = `Hold Original Signal (${oldS.toFixed(2)})`;
+      document.getElementById('vHold').className = 'vbtn hold';
+      document.getElementById('vAccept').style.display = '';
+      document.getElementById('vAccept').textContent = `Accept Remix (${newS.toFixed(2)})`;
+      document.getElementById('vAccept').className = 'vbtn accept';
+      document.getElementById('vMerge').style.display = '';
+      document.getElementById('vMerge').textContent = '⚡ Merge Perspectives → 0.93';
+      setRadarBars([
+        ['rd1','n','-21%','bn1','nb',71,'bo1',92],
+        ['rd2','n','-7%','bn2','nb',82,'bo2',88],
+        ['rd3','n','-25%','bn3','nb',64,'bo3',86]
+      ]);
+    }
+    document.getElementById('sharedRow').style.display = isStronger ? 'none' : 'flex';
+  }
+};
+
+// ── Fracture canvas globals (driven by OracleController.setMode) ──
+let fractureModeActive = false;
+let fractureSeverity   = 0;   // 0–1
+let fracturePhase      = 0;
+
 const arena=document.getElementById('arena'),cvs=document.getElementById('cvs'),cx=cvs.getContext('2d');
 function resize(){const r=arena.getBoundingClientRect();cvs.width=r.width;cvs.height=r.height}
 resize();window.addEventListener('resize',resize);
@@ -505,11 +683,15 @@ function arc(a,b,col,al,j,w){
   cx.beginPath();cx.moveTo(a.x,a.y);cx.quadraticCurveTo(mx,my,b.x,b.y);cx.stroke();
   cx.restore();
 }
-function fracArc(a,b,col,al,j,amt){for(let i=0;i<10;i++){const t0=i/10,t1=(i+1)/10;const mx=(a.x+b.x)/2+Math.sin(j)*15+Math.sin(fracT*3+i*1.3)*amt,my=(a.y+b.y)/2+Math.cos(j)*11+Math.cos(fracT*2.6+i)*amt;const x0=lerp(a.x,lerp(a.x,mx,t0),t0),y0=lerp(a.y,lerp(a.y,my,t0),t0),x1=lerp(a.x,lerp(a.x,mx,t1),t1),y1=lerp(a.y,lerp(a.y,my,t1),t1);cx.save();cx.globalAlpha=al*(i%2===0?.85:.45);cx.strokeStyle=col;cx.lineWidth=1.5;cx.shadowColor=col;cx.shadowBlur=8;cx.beginPath();cx.moveTo(x0,y0);cx.lineTo(x1,y1);cx.stroke();cx.restore()}}
+function fracArc(a,b,col,al,j,amt){
+  // Scale fracture amount by OracleController severity
+  amt = amt * (0.4 + fractureSeverity * 1.6);for(let i=0;i<10;i++){const t0=i/10,t1=(i+1)/10;const mx=(a.x+b.x)/2+Math.sin(j)*15+Math.sin(fracT*3+i*1.3)*amt,my=(a.y+b.y)/2+Math.cos(j)*11+Math.cos(fracT*2.6+i)*amt;const x0=lerp(a.x,lerp(a.x,mx,t0),t0),y0=lerp(a.y,lerp(a.y,my,t0),t0),x1=lerp(a.x,lerp(a.x,mx,t1),t1),y1=lerp(a.y,lerp(a.y,my,t1),t1);cx.save();cx.globalAlpha=al*(i%2===0?.85:.45);cx.strokeStyle=col;cx.lineWidth=1.5;cx.shadowColor=col;cx.shadowBlur=8;cx.beginPath();cx.moveTo(x0,y0);cx.lineTo(x1,y1);cx.stroke();cx.restore()}}
 function sharedArc(a,b,al){const mx=(a.x+b.x)/2+Math.sin(arcT)*13,my=(a.y+b.y)/2+Math.cos(arcT)*10;const sx=lerp(a.x,mx,.35),sy=lerp(a.y,my,.35),ex=lerp(mx,b.x,.65),ey=lerp(my,b.y,.65);cx.save();cx.globalAlpha=al*(0.55+Math.sin(arcT*2)*.3);cx.strokeStyle='#5dba6e';cx.lineWidth=4;cx.shadowColor='#5dba6e';cx.shadowBlur=20;cx.beginPath();cx.moveTo(sx,sy);cx.lineTo(ex,ey);cx.stroke();cx.restore()}
 
 function loop(){
   requestAnimationFrame(loop);t+=.012;arcT+=.03;fracT+=.05;
+  // Advance fracture phase when active
+  if(fractureModeActive) fracturePhase += 0.07;
   cx.clearRect(0,0,cvs.width,cvs.height);
   const hub=ctr(document.getElementById('hub'));
   const mp=ctr(document.getElementById('qmp')),cb=ctr(document.getElementById('qcb'));
@@ -564,8 +746,11 @@ function scenario1(){
 function scenario2(){
   if(running)return;running=true;
   document.getElementById('btn2').disabled=true;document.getElementById('btn3').disabled=true;
-  cMode='weaker';hasShared=true;phase='conflict';setHub('c');
-  setDots(3,'danger');setBadge('⚡ Conflict','conflict');setST('Conflict — reasoning weakened, Oracle adjudicating');
+  cMode='weaker';hasShared=true;
+  // ── OracleController drives Phase 1→2 transition ──
+  OracleController.triggerRemix(0.74, false);
+  phase='conflict';
+  setDots(3,'danger');setST('Conflict — reasoning weakened, Oracle adjudicating');
   resetQCards();addQClass('qmp','lit');addQClass('qcf','lit');addQClass('qcb','remix');addQClass('qma','remix');addQClass('qmp','shared');
   document.getElementById('verdictCard').className='verdict-card';
   document.getElementById('verdHead').className='verdict-head';document.getElementById('verdHead').textContent='⚡ Conflict Detected: Reasoning Weakened';
@@ -587,8 +772,11 @@ function scenario2(){
 function scenario3(){
   if(running)return;running=true;
   document.getElementById('btn2').disabled=true;document.getElementById('btn3').disabled=true;
-  cMode='stronger';hasShared=false;phase='conflict';setHub('a');
-  setDots(3,'amp');setBadge('⚡ Amplified','amplified');setST('Signal amplified — stronger remix found');
+  cMode='stronger';hasShared=false;
+  // ── OracleController drives Phase 1→2 transition ──
+  OracleController.triggerRemix(0.94, true);
+  phase='conflict';
+  setDots(3,'amp');setST('Signal amplified — stronger remix found');
   resetQCards();addQClass('qmp','lit');addQClass('qcf','lit');addQClass('qma','remix');addQClass('qcb','remix');
   document.getElementById('verdictCard').className='verdict-card ac';
   document.getElementById('verdHead').className='verdict-head a';document.getElementById('verdHead').textContent='⚡ Signal Amplified: Stronger Remix Found';
@@ -637,6 +825,10 @@ function doMerge(){
 }
 function doReset(){
   phase='idle';cMode=null;hasShared=false;arcT=0;running=false;logCnt=0;sigs=[];
+  // Reset OracleController
+  OracleController.state.mode='idle';
+  OracleController.state.remixScore=null;
+  fractureModeActive=false;fractureSeverity=0;fracturePhase=0;
   resetQCards();showVerdict(false);setHub('');
   setDots(0,'on');setBadge('Idle');setST('Idle — run Scenario 1 to establish a signal');
   setConvPanel('—','No Signal Yet',null,'<span class="cs-pill" style="color:var(--muted)">Run a scenario</span>','Oracle is idle. Run Scenario 1 to establish the first convergence signal.','','');
