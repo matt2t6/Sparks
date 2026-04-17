@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Oracle Conflict State</title>
+<style>
+:root {
+  --bg:#0b0a08;--s1:#131210;--s2:#1a1916;--s3:#222120;
+  --border:rgba(255,255,255,.07);--div:rgba(255,255,255,.04);
+  --text:#e2ddd5;--muted:#8a8680;--faint:#3a3835;
+  --primary:#4f98a3;--blue:#5b9bd5;--orange:#f09a3e;
+  --cyan:#3ecfcf;--red:#d95050;--amber:#e8b84b;
+  --gold:#f0cc5a;--wgold:#fff8e1;--green:#5dba6e;
+  --r-sm:.5rem;--r-md:.75rem;--r-lg:1.2rem;--r-xl:1.6rem;--r-full:999px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+.app{display:grid;grid-template-rows:52px 1fr;min-height:100vh}
+.topbar{display:flex;align-items:center;gap:14px;padding:0 22px;background:rgba(11,10,8,.96);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:200}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--primary),var(--blue));display:grid;place-items:center;flex-shrink:0}
+.brand{font-size:.93rem;font-weight:700;letter-spacing:-.02em}
+.brand b{color:var(--primary)}
+.tb-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.badge{padding:4px 12px;border-radius:var(--r-full);font-size:.67rem;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--border);color:var(--muted);transition:all .3s}
+.badge.hot{border-color:rgba(240,204,90,.4);color:var(--gold);background:rgba(240,204,90,.06)}
+.badge.conflict{border-color:rgba(217,80,80,.4);color:var(--red);background:rgba(217,80,80,.06);animation:cpulse 1s ease-in-out infinite}
+.badge.amplified{border-color:rgba(93,186,110,.4);color:var(--green);background:rgba(93,186,110,.06)}
+@keyframes cpulse{0%,100%{opacity:1}50%{opacity:.6}}
+.body{display:grid;grid-template-columns:1fr 410px;min-height:0}
+
+/* ARENA */
+.arena{position:relative;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 45%,rgba(79,152,163,.04),transparent 55%);overflow:hidden;min-height:calc(100vh - 52px)}
+#cvs{position:absolute;inset:0;pointer-events:none;z-index:1}
+
+/* HUB GRID */
+.hub-grid{display:grid;grid-template-columns:205px 175px 205px;grid-template-rows:185px 175px 185px;gap:13px;position:relative;z-index:2}
+
+/* QUAD CARDS */
+.qc{border-radius:var(--r-lg);border:1px solid var(--border);background:var(--s1);padding:15px;display:flex;flex-direction:column;gap:7px;position:relative;overflow:hidden;transition:all .5s cubic-bezier(.16,1,.3,1)}
+.qc.lit.q-mp{border-color:rgba(91,155,213,.28);background:rgba(91,155,213,.04);box-shadow:0 0 28px rgba(91,155,213,.12)}
+.qc.lit.q-cb{border-color:rgba(217,80,80,.25);background:rgba(217,80,80,.04);box-shadow:0 0 28px rgba(217,80,80,.1)}
+.qc.lit.q-ma{border-color:rgba(62,207,207,.25);background:rgba(62,207,207,.04);box-shadow:0 0 28px rgba(62,207,207,.1)}
+.qc.lit.q-cf{border-color:rgba(232,184,75,.25);background:rgba(232,184,75,.04);box-shadow:0 0 28px rgba(232,184,75,.1)}
+.qc.remix{border-color:rgba(240,204,90,.35)!important;background:rgba(240,204,90,.05)!important;box-shadow:0 0 28px rgba(240,204,90,.15)!important}
+.qc.shared{border-color:rgba(93,186,110,.35)!important;background:rgba(93,186,110,.04)!important;box-shadow:0 0 20px rgba(93,186,110,.1)!important}
+.q-lbl{font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.q-mp .q-lbl{color:var(--blue)}.q-cb .q-lbl{color:var(--red)}.q-ma .q-lbl{color:var(--cyan)}.q-cf .q-lbl{color:var(--amber)}
+.q-title{font-size:.79rem;font-weight:700;line-height:1.25}
+.q-body{font-size:.71rem;color:var(--muted);line-height:1.5}
+
+/* ICONS */
+.arc-a,.arc-b{transform-origin:19px 19px}
+.qc.lit .arc-a{animation:spinA 2s linear infinite}
+.qc.lit .arc-b{animation:spinB 2.8s linear infinite}
+@keyframes spinA{to{transform:rotate(360deg)}}@keyframes spinB{to{transform:rotate(-360deg)}}
+.ma-wrap{position:relative;display:flex;align-items:center;justify-content:center;width:35px;height:35px}
+.ma-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px var(--cyan)}
+.ma-ring{position:absolute;width:21px;height:21px;border-radius:50%;border:1.5px solid var(--cyan);opacity:.4;animation:maPingI 3s ease-out infinite}
+.qc.lit .ma-ring{animation:maP 1s ease-out infinite}
+.qc.lit .ma-dot{animation:maG .7s ease-in-out infinite alternate}
+@keyframes maPingI{0%{transform:scale(.5);opacity:.3}100%{transform:scale(1.7);opacity:0}}
+@keyframes maP{0%{transform:scale(.5);opacity:.7}100%{transform:scale(1.8);opacity:0}}
+@keyframes maG{from{box-shadow:0 0 4px var(--cyan)}to{box-shadow:0 0 18px var(--cyan),0 0 32px rgba(62,207,207,.4)}}
+.cf-wrap{display:flex;align-items:center;justify-content:center;width:35px;height:35px}
+.cf-sphere{width:20px;height:20px;border-radius:50%;border:2px solid var(--amber);box-shadow:0 0 6px rgba(232,184,75,.3)}
+.qc.lit .cf-sphere{animation:cfV .13s ease-in-out infinite alternate}
+@keyframes cfV{from{transform:translateX(-2px) rotate(-2deg)}to{transform:translateX(2px) rotate(2deg) scale(1.05)}}
+
+/* CENTER HUB */
+.hub-wrap{grid-column:2;grid-row:2;display:flex;align-items:center;justify-content:center;position:relative}
+.hub{width:150px;height:150px;border-radius:50%;background:var(--s2);border:1px solid rgba(79,152,163,.25);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;cursor:pointer;position:relative;overflow:visible;transition:all .4s cubic-bezier(.16,1,.3,1);box-shadow:0 0 40px rgba(79,152,163,.07)}
+.hub:hover{background:rgba(79,152,163,.07);border-color:rgba(79,152,163,.4);box-shadow:0 0 60px rgba(79,152,163,.18)}
+.hub.cm{border-color:rgba(217,80,80,.5)!important;animation:hConf 1.2s ease-in-out infinite}
+.hub.am{border-color:rgba(93,186,110,.5)!important;box-shadow:0 0 50px rgba(93,186,110,.18)!important}
+@keyframes hConf{0%,100%{box-shadow:0 0 40px rgba(217,80,80,.15)}50%{box-shadow:0 0 70px rgba(217,80,80,.3)}}
+.h-ring{position:absolute;border-radius:50%;border:1px solid rgba(79,152,163,.12);animation:hR 3s ease-in-out infinite;pointer-events:none}
+.h-ring:nth-child(1){width:180px;height:180px}.h-ring:nth-child(2){width:215px;height:215px;animation-delay:.5s;border-color:rgba(79,152,163,.06)}.h-ring:nth-child(3){width:250px;height:250px;animation-delay:1s;border-color:rgba(79,152,163,.03)}
+@keyframes hR{0%,100%{opacity:.5;transform:scale(.97)}50%{opacity:1;transform:scale(1)}}
+.hub-icon{color:var(--primary);transition:color .3s}
+.hub.cm .hub-icon{color:var(--red)}.hub.am .hub-icon{color:var(--green)}
+.hub-txt{font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:center;max-width:72px;line-height:1.3}
+.snova{position:absolute;border-radius:50%;width:150px;height:150px;background:radial-gradient(circle,var(--wgold),var(--gold) 25%,transparent 70%);pointer-events:none;opacity:0;transform:scale(0);z-index:20}
+
+/* ORACLE VERDICT */
+.verdict-wrap{position:absolute;top:50%;left:50%;transform:translate(-50%,-42%);z-index:50;width:295px;opacity:0;pointer-events:none;transition:opacity .5s cubic-bezier(.16,1,.3,1),transform .5s cubic-bezier(.16,1,.3,1)}
+.verdict-wrap.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+.verdict-card{background:rgba(16,14,12,.97);border-radius:var(--r-xl);border:1px solid rgba(232,184,75,.28);box-shadow:0 0 60px rgba(232,184,75,.14),0 20px 60px rgba(0,0,0,.65);padding:20px;display:flex;flex-direction:column;gap:14px;backdrop-filter:blur(20px)}
+.verdict-card.ac{border-color:rgba(93,186,110,.32)!important;box-shadow:0 0 60px rgba(93,186,110,.18),0 20px 60px rgba(0,0,0,.65)!important}
+.verdict-head{font-size:.64rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--amber)}
+.verdict-head.a{color:var(--green)}
+.shared-row{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:var(--r-md);background:rgba(93,186,110,.08);border:1px solid rgba(93,186,110,.2)}
+.shared-txt{font-size:.69rem;color:var(--green);line-height:1.35}
+.score-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:rgba(255,255,255,.03);border-radius:var(--r-md);border:1px solid var(--border)}
+.score-item{display:flex;flex-direction:column;align-items:center;gap:2px}
+.score-v{font-size:1.45rem;font-weight:900;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.s-old{color:var(--gold)}.s-new-w{color:var(--red)}.s-new-s{color:var(--green)}
+.score-lbl{font-size:.58rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.arr{font-size:1rem;color:var(--muted)}
+.radar{display:flex;flex-direction:column;gap:8px}
+.r-row{display:flex;flex-direction:column;gap:4px}
+.r-top{display:flex;justify-content:space-between;align-items:center}
+.r-lbl{font-size:.64rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.r-delta{font-size:.67rem;font-weight:700;font-variant-numeric:tabular-nums}
+.r-delta.n{color:var(--red)}.r-delta.p{color:var(--green)}
+.bar-track{width:100%;height:5px;background:rgba(255,255,255,.07);border-radius:3px;position:relative;overflow:hidden}
+.bar-old{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,.18);border-radius:3px}
+.bar-new{position:absolute;top:0;left:0;height:100%;border-radius:3px;width:0;transition:width .8s cubic-bezier(.16,1,.3,1) .15s}
+.bar-new.nb{background:var(--red)}.bar-new.pb{background:var(--green)}
+.vbtns{display:flex;flex-direction:column;gap:7px}
+.vbtn{padding:11px 14px;border-radius:var(--r-md);border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--muted);font-size:.67rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;transition:all .2s}
+.vbtn:hover{background:rgba(255,255,255,.09);color:var(--text)}
+.vbtn.hold{border-color:rgba(240,204,90,.3);color:var(--gold)}.vbtn.hold:hover{background:rgba(240,204,90,.08)}
+.vbtn.accept{color:rgba(255,255,255,.33)}.vbtn.accept:hover{color:var(--muted)}
+.vbtn.merge{background:linear-gradient(135deg,rgba(240,204,90,.12),rgba(79,152,163,.12));border-color:rgba(240,204,90,.38);color:var(--gold);box-shadow:0 0 18px rgba(240,204,90,.1)}.vbtn.merge:hover{background:linear-gradient(135deg,rgba(240,204,90,.22),rgba(79,152,163,.2))}
+.vbtn.amp-acc{border-color:rgba(93,186,110,.3);color:var(--green)}.vbtn.amp-acc:hover{background:rgba(93,186,110,.08)}
+
+/* STATE BAR */
+.state-bar{position:absolute;bottom:18px;display:flex;gap:8px;align-items:center;z-index:5}
+.sd{width:7px;height:7px;border-radius:50%;background:var(--faint);transition:all .3s}
+.sd.on{background:var(--primary);box-shadow:0 0 8px var(--primary)}.sd.gold{background:var(--gold);box-shadow:0 0 8px var(--gold)}.sd.danger{background:var(--red);box-shadow:0 0 8px var(--red)}.sd.amp{background:var(--green);box-shadow:0 0 8px var(--green)}
+.state-txt{font-size:.67rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+
+/* PANEL */
+.panel{border-left:1px solid var(--border);background:var(--s1);display:flex;flex-direction:column;overflow:hidden}
+.panel-hd{padding:17px 20px 13px;border-bottom:1px solid var(--border);flex-shrink:0}
+.panel-hd h2{font-size:.97rem;font-weight:700;letter-spacing:-.02em;margin-bottom:2px}
+.panel-hd p{font-size:.67rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.panel-scroll{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:16px}
+.panel-scroll::-webkit-scrollbar{width:3px}
+.panel-scroll::-webkit-scrollbar-thumb{background:var(--s3);border-radius:2px}
+.sec-lbl{font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sec-lbl::after{content:"";flex:1;height:1px;background:var(--div)}
+.demo-controls{display:flex;flex-direction:column;gap:7px}
+.demo-btn{padding:10px 14px;border-radius:var(--r-md);border:none;cursor:pointer;font-size:.71rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;transition:all .2s;text-align:center}
+.demo-btn.primary{background:var(--primary);color:#0b0a08;box-shadow:0 0 18px rgba(79,152,163,.25)}
+.demo-btn.primary:hover{background:#66acb5;transform:translateY(-1px)}
+.demo-btn.danger{background:rgba(217,80,80,.1);color:var(--red);border:1px solid rgba(217,80,80,.22)}
+.demo-btn.danger:hover{background:rgba(217,80,80,.17)}
+.demo-btn.success{background:rgba(93,186,110,.1);color:var(--green);border:1px solid rgba(93,186,110,.22)}
+.demo-btn.success:hover{background:rgba(93,186,110,.17)}
+.demo-btn.reset-btn{background:var(--s3);color:var(--muted);border:1px solid var(--border)}
+.demo-btn.reset-btn:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.demo-btn:disabled{opacity:.3;cursor:not-allowed;transform:none!important}
+.hist{display:flex;flex-direction:column;gap:7px}
+.hi{display:flex;align-items:flex-start;gap:9px;padding:9px 11px;border-radius:var(--r-md);background:var(--s2);border:1px solid var(--border);transition:all .4s}
+.hi.active{border-color:rgba(240,204,90,.22);background:rgba(240,204,90,.03)}
+.hi-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:3px}
+.hi-content{flex:1}
+.hi-sparks{font-size:.67rem;font-weight:700}
+.hi-note{font-size:.64rem;color:var(--muted);line-height:1.4;margin-top:1px}
+.hi-score{font-size:.84rem;font-weight:900;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.log-list{display:flex;flex-direction:column;gap:6px}
+.le{padding:8px 11px;border-radius:var(--r-md);font-size:.67rem;color:var(--muted);line-height:1.45;background:var(--s2);border-left:2px solid var(--faint);transition:all .4s}
+.le.conflict{border-left-color:var(--red);color:rgba(255,255,255,.62)}.le.hold{border-left-color:var(--gold);color:rgba(255,255,255,.62)}.le.accept{border-left-color:var(--blue)}.le.merge{border-left-color:var(--green);color:rgba(255,255,255,.62)}.le.amp{border-left-color:var(--green);color:rgba(255,255,255,.62)}
+.le-ts{font-size:.59rem;color:var(--faint);margin-bottom:2px;display:block}
+.conv-panel{border-radius:var(--r-lg);background:linear-gradient(135deg,rgba(240,204,90,.05),rgba(79,152,163,.05));border:1px solid rgba(240,204,90,.16);padding:14px;display:flex;flex-direction:column;gap:9px}
+.conv-panel.cp{background:linear-gradient(135deg,rgba(217,80,80,.07),rgba(232,184,75,.04))!important;border-color:rgba(217,80,80,.2)!important}
+.conv-panel.ap{background:linear-gradient(135deg,rgba(93,186,110,.07),rgba(79,152,163,.05))!important;border-color:rgba(93,186,110,.2)!important}
+.conv-top{display:flex;align-items:center;gap:11px}
+.conv-score{font-size:1.75rem;font-weight:900;letter-spacing:-.04em;font-variant-numeric:tabular-nums;background:linear-gradient(135deg,var(--gold),var(--primary));-webkit-background-clip:text;-webkit-text-fill-color:transparent;transition:all .4s}
+.conv-score.cs{background:linear-gradient(135deg,var(--red),var(--amber));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.conv-score.as{background:linear-gradient(135deg,var(--green),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.conv-tag{font-size:.61rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:3px}
+.conv-tag.ct{color:var(--red)}.conv-tag.at{color:var(--green)}
+.conv-sparks{display:flex;gap:5px;flex-wrap:wrap}
+.cs-pill{font-size:.61rem;padding:2px 7px;border-radius:var(--r-full);border:1px solid var(--border);background:var(--s1)}
+.conv-insight{font-size:.72rem;line-height:1.58;color:var(--text)}
+@media(max-width:880px){.body{grid-template-columns:1fr}.panel{border-left:none;border-top:1px solid var(--border);max-height:48vh}.hub-grid{grid-template-columns:148px 162px 148px;grid-template-rows:162px 162px 162px}.hub{width:140px;height:140px}.snova{width:140px;height:140px}.verdict-wrap{width:260px}}
+
+/* ═══════════════ 3D UPGRADE ═══════════════ */
+.arena{perspective:1200px;perspective-origin:50% 45%}
+.hub-grid{transform-style:preserve-3d}
+
+/* Cards tilt in 3D */
+.qc{
+  transform-style:preserve-3d;
+  transform:rotateX(6deg) rotateY(-4deg) translateZ(0px);
+  transition:transform .6s cubic-bezier(.16,1,.3,1),box-shadow .5s,border-color .5s,background .5s;
+  will-change:transform;
+}
+.qc:nth-child(1){transform:rotateX(7deg) rotateY(6deg) translateZ(8px)}
+.qc:nth-child(3){transform:rotateX(7deg) rotateY(-6deg) translateZ(8px)}
+.qc:nth-child(7){transform:rotateX(-7deg) rotateY(6deg) translateZ(8px)}
+.qc:nth-child(9){transform:rotateX(-7deg) rotateY(-6deg) translateZ(8px)}
+.qc:hover{transform:rotateX(0deg) rotateY(0deg) translateZ(28px) scale(1.03)!important;box-shadow:0 24px 60px rgba(0,0,0,.55)!important}
+.qc.lit{transform:rotateX(2deg) rotateY(-2deg) translateZ(18px)!important}
+.qc.remix{transform:rotateX(3deg) rotateY(3deg) translateZ(20px)!important}
+
+/* Hub 3D elevation + gyro orbit rings */
+.hub{transform-style:preserve-3d;transform:translateZ(32px)}
+.hub:hover{transform:translateZ(50px) scale(1.05)!important}
+.hub.cm{transform:translateZ(32px)}
+.hub.am{transform:translateZ(44px)}
+
+/* Orbit rings become 3D ellipses */
+.h-ring{transform-style:preserve-3d}
+.h-ring:nth-child(1){
+  width:190px;height:190px;
+  transform:rotateX(72deg) translateZ(0px);
+  animation:orbit1 4s linear infinite;
+  border-color:rgba(79,152,163,.22);
+  border-width:1.5px;
+}
+.h-ring:nth-child(2){
+  width:230px;height:230px;
+  transform:rotateX(72deg) rotateZ(60deg) translateZ(0px);
+  animation:orbit2 6s linear infinite;
+  border-color:rgba(79,152,163,.12);
+}
+.h-ring:nth-child(3){
+  width:270px;height:270px;
+  transform:rotateX(72deg) rotateZ(120deg) translateZ(0px);
+  animation:orbit3 9s linear infinite;
+  border-color:rgba(79,152,163,.06);
+}
+@keyframes orbit1{from{transform:rotateX(72deg) rotateZ(0deg)}to{transform:rotateX(72deg) rotateZ(360deg)}}
+@keyframes orbit2{from{transform:rotateX(72deg) rotateZ(60deg)}to{transform:rotateX(72deg) rotateZ(420deg)}}
+@keyframes orbit3{from{transform:rotateX(72deg) rotateZ(120deg)}to{transform:rotateX(72deg) rotateZ(480deg)}}
+
+/* Lit / conflict / merge hub ring overrides */
+.hub.cm .h-ring:nth-child(1){border-color:rgba(217,80,80,.35);animation-duration:2.5s}
+.hub.cm .h-ring:nth-child(2){border-color:rgba(217,80,80,.2);animation-duration:3.5s}
+.hub.am .h-ring:nth-child(1){border-color:rgba(93,186,110,.35);animation-duration:3s}
+.hub.am .h-ring:nth-child(2){border-color:rgba(93,186,110,.2);animation-duration:5s}
+
+/* MA icon: 3D torus */
+.ma-wrap{transform-style:preserve-3d;transform:rotateX(55deg)}
+.ma-ring{transform-style:preserve-3d}
+.qc.lit .ma-wrap{animation:maOrbit 3s linear infinite}
+@keyframes maOrbit{from{transform:rotateX(55deg) rotateZ(0deg)}to{transform:rotateX(55deg) rotateZ(360deg)}}
+
+/* CF icon: 3D sphere with latitude rings */
+.cf-sphere{
+  background:radial-gradient(circle at 35% 35%, rgba(232,184,75,.25), transparent 65%),
+             radial-gradient(circle at 65% 65%, rgba(232,184,75,.08), transparent 50%);
+  box-shadow:
+    0 0 0 1px rgba(232,184,75,.5),
+    inset -3px -3px 8px rgba(0,0,0,.4),
+    inset 3px 3px 8px rgba(232,184,75,.15),
+    0 0 12px rgba(232,184,75,.3);
+  transform:rotateX(-15deg) rotateY(15deg);
+  transition:transform .2s;
+}
+.qc.lit .cf-sphere{
+  animation:cfSpin .9s ease-in-out infinite alternate;
+}
+@keyframes cfSpin{
+  from{transform:rotateX(-20deg) rotateY(-20deg) scale(.95)}
+  to{transform:rotateX(20deg) rotateY(20deg) scale(1.1)}
+}
+
+/* MP icon arcs: 3D gyroscope */
+.qc.lit .arc-a{animation:spin3dA 2s linear infinite}
+.qc.lit .arc-b{animation:spin3dB 2.8s linear infinite}
+@keyframes spin3dA{
+  0%{transform:rotateY(0deg)}
+  100%{transform:rotateY(360deg)}
+}
+@keyframes spin3dB{
+  0%{transform:rotateX(0deg) rotateZ(0deg)}
+  100%{transform:rotateX(360deg) rotateZ(-360deg)}
+}
+
+/* Supernova: 3D burst */
+.snova{
+  transform-style:preserve-3d;
+  transform:scale(0) rotateX(0deg);
+}
+
+/* Verdict card: slight 3D tilt-in */
+.verdict-wrap.show .verdict-card{
+  animation:verdictDrop .55s cubic-bezier(.16,1,.3,1) both;
+}
+@keyframes verdictDrop{
+  from{transform:rotateX(-18deg) translateY(-20px) scale(.93);opacity:0}
+  to{transform:rotateX(0deg) translateY(0px) scale(1);opacity:1}
+}
+
+/* Card inner pseudo-depth layer */
+.qc::before{
+  content:'';
+  position:absolute;inset:0;
+  border-radius:inherit;
+  background:linear-gradient(160deg,rgba(255,255,255,.035) 0%,transparent 55%);
+  pointer-events:none;
+  z-index:1;
+}
+.qc::after{
+  content:'';
+  position:absolute;
+  bottom:-4px;left:4px;right:4px;
+  height:12px;
+  border-radius:0 0 var(--r-lg) var(--r-lg);
+  background:rgba(0,0,0,.35);
+  filter:blur(6px);
+  z-index:-1;
+}
+
+/* Canvas arc depth: handled in JS */
+
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+    <span class="brand">Spark <b>Engine</b> — <span style="color:var(--muted);font-weight:400;font-size:.82rem">Oracle</span></span>
+    <div class="tb-right"><span class="badge" id="phaseBadge">Idle</span></div>
+  </header>
+  <div class="body">
+    <div class="arena" id="arena">
+      <canvas id="cvs"></canvas>
+      <div class="hub-grid">
+        <!-- TL: Misaligned Pattern -->
+        <div class="qc q-mp" id="qmp" style="grid-column:1;grid-row:1">
+          <div class="q-lbl">Misaligned Pattern</div>
+          <div style="width:36px;height:36px;margin-bottom:2px">
+            <svg width="36" height="36" viewBox="0 0 38 38" fill="none">
+              <g class="arc-a" style="transform-origin:19px 19px"><path d="M19 5 A14 14 0 0 1 33 19" stroke="var(--blue)" stroke-width="2" stroke-linecap="round"/><circle cx="33" cy="19" r="2.5" fill="var(--blue)"/></g>
+              <g class="arc-b" style="transform-origin:19px 19px"><path d="M19 33 A14 14 0 0 1 5 19" stroke="var(--orange)" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="19" r="2.5" fill="var(--orange)"/></g>
+            </svg>
+          </div>
+          <div class="q-title">Hardware as managed asset pool</div>
+          <div class="q-body">Library model: DRAM checked out — not owned as BOM line</div>
+        </div>
+        <div style="grid-column:2;grid-row:1"></div>
+        <!-- TR: Constraint Break -->
+        <div class="qc q-cb" id="qcb" style="grid-column:3;grid-row:1">
+          <div class="q-lbl">Constraint Break</div>
+          <div style="width:36px;height:36px;margin-bottom:2px">
+            <svg width="36" height="36" viewBox="0 0 38 38" fill="none">
+              <!-- Left chain link -->
+              <rect x="4" y="13" width="11" height="7" rx="3.5" stroke="var(--red)" stroke-width="1.8"/>
+              <!-- Right chain link -->
+              <rect x="23" y="18" width="11" height="7" rx="3.5" stroke="var(--red)" stroke-width="1.8"/>
+              <!-- Break gap — fractured link lines -->
+              <path d="M15 16.5 L17 17.5" stroke="var(--red)" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M21 19.5 L23 20.5" stroke="var(--red)" stroke-width="1.5" stroke-linecap="round"/>
+              <!-- Spark at break point -->
+              <path d="M18 15 L19.5 19 L17.5 19 L19 23" stroke="var(--amber)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="q-title">Break ownership entirely</div>
+          <div class="q-body">Manufacturer retains lithium + cobalt title through lifecycle</div>
+        </div>
+        <div style="grid-column:1;grid-row:2"></div>
+        <!-- CENTER HUB -->
+        <div class="hub-wrap" style="grid-column:2;grid-row:2">
+          <div class="hub" id="hub">
+            <div class="h-ring"></div><div class="h-ring"></div><div class="h-ring"></div>
+            <svg id="hubIcon" class="hub-icon" width="30" height="30" viewBox="0 0 30 30" fill="none">
+              <!-- Shadow/depth face -->
+              <path d="M16 3L5 16h9.5l-1.5 10 12-14h-9.5l1.5-9z" fill="currentColor" opacity=".12" transform="translate(1.5,2)"/>
+              <!-- Main bolt body -->
+              <path d="M16 3L5 16h9.5l-1.5 10 12-14h-9.5z" fill="currentColor" opacity=".18"/>
+              <!-- Bright outline -->
+              <path d="M16 3L5 16h9.5l-1.5 10 12-14h-9.5L16 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <!-- Specular edge -->
+              <path d="M16 3L9 14h7" stroke="rgba(255,255,255,.45)" stroke-width=".9" stroke-linecap="round"/>
+            </svg>
+            <span class="hub-txt" id="hubTxt">Click to fire</span>
+            <div class="snova" id="snova"></div>
+          </div>
+        </div>
+        <div style="grid-column:3;grid-row:2"></div>
+        <!-- BL: Micro-Anomaly -->
+        <div class="qc q-ma" id="qma" style="grid-column:1;grid-row:3">
+          <div class="q-lbl">Micro-Anomaly</div>
+          <div class="ma-wrap" style="margin-bottom:2px"><div class="ma-ring"></div><div class="ma-dot"></div></div>
+          <div class="q-title">2% gold salvage in discarded DRAM</div>
+          <div class="q-body">Recoverable below current sorting threshold</div>
+        </div>
+        <div style="grid-column:2;grid-row:3"></div>
+        <!-- BR: Compression Failure -->
+        <div class="qc q-cf" id="qcf" style="grid-column:3;grid-row:3">
+          <div class="q-lbl">Compression Failure</div>
+          <div class="cf-wrap" style="margin-bottom:2px"><div class="cf-sphere"></div></div>
+          <div class="q-title">P&amp;L leaks at reverse logistics</div>
+          <div class="q-body">Low-cost phone is incoherent at current memory prices</div>
+        </div>
+      </div>
+
+      <!-- Oracle Verdict overlay -->
+      <div class="verdict-wrap" id="verdictWrap">
+        <div class="verdict-card" id="verdictCard">
+          <div class="verdict-head" id="verdHead">⚡ Conflict Detected: Reasoning Weakened</div>
+          <div class="shared-row" id="sharedRow" style="display:none">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--green)" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="M8 4v8M4 8h8" stroke-linecap="round"/></svg>
+            <span class="shared-txt" id="sharedTxt">Shared core: memory as misallocated capital — both paths agree on root cause</span>
+          </div>
+          <div class="score-row">
+            <div class="score-item"><div class="score-v s-old" id="oldSc">0.89</div><div class="score-lbl">Original</div></div>
+            <div class="arr" id="arrIcon">→</div>
+            <div class="score-item"><div class="score-v" id="newSc" style="color:var(--red)">0.74</div><div class="score-lbl">Remix</div></div>
+          </div>
+          <div class="radar" id="radarDiv">
+            <div class="r-row"><div class="r-top"><span class="r-lbl">Structural Depth</span><span class="r-delta n" id="rd1">−21%</span></div><div class="bar-track"><div class="bar-old" id="bo1" style="width:92%"></div><div class="bar-new nb" id="bn1"></div></div></div>
+            <div class="r-row"><div class="r-top"><span class="r-lbl">Novelty</span><span class="r-delta n" id="rd2">−7%</span></div><div class="bar-track"><div class="bar-old" id="bo2" style="width:88%"></div><div class="bar-new nb" id="bn2"></div></div></div>
+            <div class="r-row"><div class="r-top"><span class="r-lbl">Actionability</span><span class="r-delta n" id="rd3">−25%</span></div><div class="bar-track"><div class="bar-old" id="bo3" style="width:86%"></div><div class="bar-new nb" id="bn3"></div></div></div>
+          </div>
+          <div class="vbtns">
+            <button class="vbtn hold" id="vHold" onclick="doHold()">Hold Original Signal (0.89)</button>
+            <button class="vbtn accept" id="vAccept" onclick="doAccept()">Accept Remix (0.74)</button>
+            <button class="vbtn merge" id="vMerge" onclick="doMerge()" style="display:none">⚡ Merge Perspectives → 0.93</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="state-bar">
+        <div class="sd on" id="sd0"></div><div class="sd" id="sd1"></div><div class="sd" id="sd2"></div><div class="sd" id="sd3"></div><div class="sd" id="sd4"></div>
+        <span class="state-txt" id="stTxt">Idle — run Scenario 1 to establish a signal</span>
+      </div>
+    </div>
+
+    <!-- PANEL -->
+    <aside class="panel">
+      <div class="panel-hd"><p>Oracle Intelligence</p><h2>Convergence + Conflict Engine</h2></div>
+      <div class="panel-scroll">
+        <div>
+          <div class="sec-lbl">Scenario Controls</div>
+          <div class="demo-controls">
+            <button class="demo-btn primary" id="btn1" onclick="scenario1()">1 · Run Initial Signal (MP + CF)</button>
+            <button class="demo-btn danger" id="btn2" onclick="scenario2()" disabled>2 · Weaker Remix → Conflict State</button>
+            <button class="demo-btn success" id="btn3" onclick="scenario3()" disabled>3 · Stronger Remix → Amplified</button>
+            <button class="demo-btn reset-btn" onclick="doReset()">↺ Full Reset</button>
+          </div>
+        </div>
+        <div>
+          <div class="sec-lbl">Active Convergence</div>
+          <div class="conv-panel" id="convPanel">
+            <div class="conv-top">
+              <div class="conv-score" id="convSc">—</div>
+              <div><div class="conv-tag" id="convTag">No Signal Yet</div><div class="conv-sparks" id="convSparks"><span class="cs-pill" style="color:var(--muted)">Run a scenario</span></div></div>
+            </div>
+            <div class="conv-insight" id="convInsight">Oracle is idle. Run Scenario 1 to establish the first convergence signal.</div>
+          </div>
+        </div>
+        <div>
+          <div class="sec-lbl">Signal History</div>
+          <div class="hist" id="histDiv"><div style="font-size:.71rem;color:var(--muted)">No signals yet.</div></div>
+        </div>
+        <div>
+          <div class="sec-lbl">Oracle Decision Log</div>
+          <div class="log-list" id="logDiv"><div style="font-size:.71rem;color:var(--muted)">Decisions will appear here.</div></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const arena=document.getElementById('arena'),cvs=document.getElementById('cvs'),cx=cvs.getContext('2d');
+function resize(){const r=arena.getBoundingClientRect();cvs.width=r.width;cvs.height=r.height}
+resize();window.addEventListener('resize',resize);
+function ctr(el){const ar=arena.getBoundingClientRect(),er=el.getBoundingClientRect();return{x:er.left-ar.left+er.width/2,y:er.top-ar.top+er.height/2}}
+function lerp(a,b,t){return a+(b-a)*t}
+
+let phase='idle',cMode=null,hasShared=false,arcT=0,fracT=0,t=0,running=false,logCnt=0,sigs=[];
+
+function fLine(a,b,col){
+  // Shadow offset gives 3D tunnel feel
+  cx.save();cx.globalAlpha=.04;cx.strokeStyle='rgba(0,0,0,.7)';cx.lineWidth=2;
+  cx.setLineDash([5,8]);cx.beginPath();cx.moveTo(a.x+3,a.y+5);cx.lineTo(b.x+3,b.y+5);cx.stroke();cx.setLineDash([]);
+  cx.restore();
+  cx.save();cx.globalAlpha=.07;cx.strokeStyle=col;cx.lineWidth=1;
+  cx.setLineDash([5,8]);cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(b.x,b.y);cx.stroke();cx.setLineDash([]);
+  cx.restore();
+}
+function pulse(a,b,col,ph){
+  const p=ph%1,x=a.x+(b.x-a.x)*p,y=a.y+(b.y-a.y)*p,al=Math.sin(p*Math.PI);
+  // 3D halo ring (ellipse = foreshortened)
+  cx.save();cx.globalAlpha=al*.22;cx.strokeStyle=col;cx.lineWidth=1;
+  cx.beginPath();cx.ellipse(x,y+2,8,3.5,0,0,Math.PI*2);cx.stroke();
+  cx.restore();
+  // Shadow
+  cx.save();cx.globalAlpha=al*.35;cx.fillStyle='rgba(0,0,0,.5)';
+  cx.beginPath();cx.ellipse(x,y+5,4,2,0,0,Math.PI*2);cx.fill();cx.restore();
+  // Main dot
+  cx.save();cx.globalAlpha=al*.9;cx.fillStyle=col;cx.shadowColor=col;cx.shadowBlur=14;
+  cx.beginPath();cx.arc(x,y,3.8,0,Math.PI*2);cx.fill();
+  // Specular highlight
+  cx.globalAlpha=al*.6;cx.fillStyle='rgba(255,255,255,.85)';cx.shadowBlur=0;
+  cx.beginPath();cx.arc(x-1.1,y-1.1,1.1,0,Math.PI*2);cx.fill();
+  cx.restore();
+}
+function arc(a,b,col,al,j,w){
+  // 3D depth: layered strokes with slight offset + width taper
+  const mx=(a.x+b.x)/2+Math.sin(j)*15,my=(a.y+b.y)/2+Math.cos(j)*11;
+  const dz = Math.sin(j)*.5+.5; // 0-1 depth factor
+  const lw = (w||2)*(0.7+dz*.6);
+  // Shadow depth layer
+  cx.save();cx.globalAlpha=Math.max(0,Math.min(1,al))*.28;
+  cx.strokeStyle=col;cx.lineWidth=lw+3;cx.shadowColor=col;cx.shadowBlur=28;
+  cx.beginPath();cx.moveTo(a.x+2,a.y+4);cx.quadraticCurveTo(mx+2,my+4,b.x+2,b.y+4);cx.stroke();
+  cx.restore();
+  // Main arc
+  cx.save();cx.globalAlpha=Math.max(0,Math.min(1,al));
+  cx.strokeStyle=col;cx.lineWidth=lw;cx.shadowColor=col;cx.shadowBlur=14;
+  cx.beginPath();cx.moveTo(a.x,a.y);cx.quadraticCurveTo(mx,my,b.x,b.y);cx.stroke();
+  // Bright highlight stroke (top-lit)
+  cx.globalAlpha=Math.max(0,Math.min(1,al))*.45;
+  cx.strokeStyle='rgba(255,255,255,.7)';cx.lineWidth=lw*.22;cx.shadowBlur=0;
+  cx.beginPath();cx.moveTo(a.x,a.y);cx.quadraticCurveTo(mx,my,b.x,b.y);cx.stroke();
+  cx.restore();
+}
+function fracArc(a,b,col,al,j,amt){for(let i=0;i<10;i++){const t0=i/10,t1=(i+1)/10;const mx=(a.x+b.x)/2+Math.sin(j)*15+Math.sin(fracT*3+i*1.3)*amt,my=(a.y+b.y)/2+Math.cos(j)*11+Math.cos(fracT*2.6+i)*amt;const x0=lerp(a.x,lerp(a.x,mx,t0),t0),y0=lerp(a.y,lerp(a.y,my,t0),t0),x1=lerp(a.x,lerp(a.x,mx,t1),t1),y1=lerp(a.y,lerp(a.y,my,t1),t1);cx.save();cx.globalAlpha=al*(i%2===0?.85:.45);cx.strokeStyle=col;cx.lineWidth=1.5;cx.shadowColor=col;cx.shadowBlur=8;cx.beginPath();cx.moveTo(x0,y0);cx.lineTo(x1,y1);cx.stroke();cx.restore()}}
+function sharedArc(a,b,al){const mx=(a.x+b.x)/2+Math.sin(arcT)*13,my=(a.y+b.y)/2+Math.cos(arcT)*10;const sx=lerp(a.x,mx,.35),sy=lerp(a.y,my,.35),ex=lerp(mx,b.x,.65),ey=lerp(my,b.y,.65);cx.save();cx.globalAlpha=al*(0.55+Math.sin(arcT*2)*.3);cx.strokeStyle='#5dba6e';cx.lineWidth=4;cx.shadowColor='#5dba6e';cx.shadowBlur=20;cx.beginPath();cx.moveTo(sx,sy);cx.lineTo(ex,ey);cx.stroke();cx.restore()}
+
+function loop(){
+  requestAnimationFrame(loop);t+=.012;arcT+=.03;fracT+=.05;
+  cx.clearRect(0,0,cvs.width,cvs.height);
+  const hub=ctr(document.getElementById('hub'));
+  const mp=ctr(document.getElementById('qmp')),cb=ctr(document.getElementById('qcb'));
+  const ma=ctr(document.getElementById('qma')),cf=ctr(document.getElementById('qcf'));
+  fLine(hub,mp,'#5b9bd5');fLine(hub,cb,'#d95050');fLine(hub,ma,'#3ecfcf');fLine(hub,cf,'#e8b84b');
+  if(phase==='idle'){pulse(hub,mp,'#5b9bd5',t);pulse(hub,cb,'#d95050',t+.25);pulse(hub,ma,'#3ecfcf',t+.5);pulse(hub,cf,'#e8b84b',t+.75)}
+  if(phase==='signal'){arc(mp,cf,'rgba(240,204,90,.9)',.8+Math.sin(arcT)*.1,arcT,2.5);arc(hub,mp,'rgba(91,155,213,.5)',.5,arcT);arc(hub,cf,'rgba(232,184,75,.5)',.5,arcT*.9);pulse(mp,hub,'#f0cc5a',arcT*.25);pulse(cf,hub,'#f0cc5a',arcT*.25+.5)}
+  if(phase==='conflict'){
+    fracArc(mp,cf,'rgba(240,204,90,.6)',.55,arcT,cMode==='weaker'?7:2);
+    const nc=cMode==='weaker'?'rgba(91,155,213,.55)':'rgba(93,186,110,.55)';
+    const p1=cMode==='weaker'?cb:ma,p2=cMode==='weaker'?ma:cb;
+    arc(p1,p2,nc,.5+Math.sin(arcT*1.3)*.15,arcT+1.2);
+    if(hasShared)sharedArc(mp,cf,.85);
+    arc(hub,mp,'rgba(91,155,213,.3)',.3,arcT);arc(hub,cf,'rgba(232,184,75,.3)',.3,arcT*.9);arc(hub,cb,'rgba(217,80,80,.3)',.3,arcT*1.1);arc(hub,ma,'rgba(62,207,207,.3)',.3,arcT*.8)
+  }
+  if(phase==='resolved-hold'){arc(mp,cf,'rgba(240,204,90,.9)',.8+Math.sin(arcT)*.1,arcT,2.5);pulse(mp,hub,'#f0cc5a',arcT*.25);pulse(cf,hub,'#f0cc5a',arcT*.25+.5)}
+  if(phase==='resolved-accept'){const p1=cMode==='acc-strong'?ma:cb,p2=cMode==='acc-strong'?cb:ma;arc(p1,p2,'rgba(91,155,213,.7)',.7+Math.sin(arcT)*.15,arcT,2)}
+  if(phase==='merge'){const bl=Math.min(1,(arcT%6)/3);arc(mp,cf,'rgba(240,204,90,.7)',.6*(1-bl*.3),arcT,2);arc(cb,ma,'rgba(91,155,213,.5)',.5*(1-bl*.4),arcT+1);arc(mp,ma,'rgba(93,186,110,.9)',bl*.9+.1,arcT,2.5+bl);arc(cf,cb,'rgba(93,186,110,.7)',bl*.7,arcT*.8,1.5);pulse(mp,hub,'#5dba6e',arcT*.3);pulse(cf,hub,'#5dba6e',arcT*.3+.5);pulse(cb,hub,'#5dba6e',arcT*.3+.25);pulse(ma,hub,'#5dba6e',arcT*.3+.75)}
+}
+loop();
+
+function setHub(m){const h=document.getElementById('hub'),i=document.getElementById('hubIcon'),txt=document.getElementById('hubTxt');h.className='hub';if(m==='c'){h.classList.add('cm');txt.textContent='Conflict'}else if(m==='a'){h.classList.add('am');txt.textContent='Amplified'}else txt.textContent='Click to fire'}
+function setBadge(label,cls){const b=document.getElementById('phaseBadge');b.textContent=label;b.className='badge'+(cls?' '+cls:'')}
+function setDots(i,cls){['sd0','sd1','sd2','sd3','sd4'].forEach((id,j)=>{document.getElementById(id).className='sd'+(j===i?' '+cls:'')})}
+function setST(txt){document.getElementById('stTxt').textContent=txt}
+function resetQCards(){['qmp','qcb','qma','qcf'].forEach(id=>{const el=document.getElementById(id);el.className=el.className.replace(/ lit| remix| shared/g,'')})}
+function addQClass(id,cls){const el=document.getElementById(id);el.classList.add(cls)}
+function showVerdict(show){document.getElementById('verdictWrap').className='verdict-wrap'+(show?' show':'')}
+function nova(){const s=document.getElementById('snova');s.style.transition='none';s.style.opacity='1';s.style.transform='scale(1)';requestAnimationFrame(()=>requestAnimationFrame(()=>{s.style.transition='all 1.4s cubic-bezier(.16,1,.3,1)';s.style.opacity='0';s.style.transform='scale(4)';s.style.filter='blur(6px)';setTimeout(()=>{s.style.transition='none';s.style.transform='scale(0)';s.style.filter=''},1500)}))}
+function implode(){const h=document.getElementById('hub');h.style.transition='transform .16s cubic-bezier(.6,0,.4,1)';h.style.transform='scale(.65)';setTimeout(()=>{h.style.transform='scale(1.15)';setTimeout(()=>{h.style.transition='transform .3s cubic-bezier(.16,1,.3,1)';h.style.transform='scale(1)'},180)},160)}
+function addLog(type,text){logCnt++;const log=document.getElementById('logDiv');if(logCnt===1)log.innerHTML='';const ts=new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',second:'2-digit'});const el=document.createElement('div');el.className='le '+type;el.innerHTML=`<span class="le-ts">${ts}</span>${text}`;log.insertBefore(el,log.firstChild)}
+function addHist(score,sparks,note,dotColor,makeActive){const hist=document.getElementById('histDiv');if(!sigs.length)hist.innerHTML='';const el=document.createElement('div');el.className='hi'+(makeActive?' active':'');el.innerHTML=`<div class="hi-dot" style="background:${dotColor}"></div><div class="hi-content"><div class="hi-sparks" style="color:${dotColor}">${sparks}</div><div class="hi-note">${note}</div></div><div class="hi-score" style="color:${dotColor}">${score}</div>`;hist.insertBefore(el,hist.firstChild);sigs.push(el);if(makeActive)sigs.forEach((s,i)=>{if(i<sigs.length-1)s.classList.remove('active')})}
+function setConvPanel(score,tag,tagCls,sparkHtml,insight,panelCls,scoreCls){document.getElementById('convPanel').className='conv-panel'+(panelCls?' '+panelCls:'');document.getElementById('convSc').className='conv-score'+(scoreCls?' '+scoreCls:'');document.getElementById('convSc').textContent=score;document.getElementById('convTag').className='conv-tag'+(tagCls?' '+tagCls:'');document.getElementById('convTag').textContent=tag;document.getElementById('convSparks').innerHTML=sparkHtml;document.getElementById('convInsight').textContent=insight}
+function setRadarBars(rows){rows.forEach(([rdId,cls,delta,bnId,bnCls,nw,boId,ow])=>{const rd=document.getElementById(rdId);rd.className='r-delta '+cls;rd.textContent=delta;document.getElementById(boId).style.width=ow+'%';const bn=document.getElementById(bnId);bn.className='bar-new '+bnCls;bn.style.width='0';setTimeout(()=>{bn.style.width=nw+'%'},300)})}
+
+function scenario1(){
+  if(running)return;running=true;
+  document.getElementById('btn1').disabled=true;
+  resetQCards();showVerdict(false);setHub('');phase='idle';
+  setDots(1,'on');setBadge('Ignition');setST('Ignition — routing problem to sparks');implode();
+  setTimeout(()=>{
+    phase='signal';arcT=0;
+    setDots(2,'gold');setBadge('Convergence','hot');setST('Convergence — MP + CF signal at 0.89');
+    addQClass('qmp','lit');addQClass('qcf','lit');nova();
+    setConvPanel('0.89','⚡ High Convergence',null,'<span class="cs-pill" style="color:var(--blue)">Misaligned Pattern</span><span class="cs-pill" style="color:var(--amber)">Compression Failure</span>','Incentive alignment failure — not a tech problem. Both operators route to rare-earth ownership as the real business model.','',' ');
+    addHist('0.89','MP + CF','Rare-earth ownership restructures unit economics','#f0cc5a',true);
+    addLog('hold','Signal established — MP × CF → 0.89 convergence. Rare-earth ownership thesis active.');
+    setTimeout(()=>{document.getElementById('btn2').disabled=false;document.getElementById('btn3').disabled=false;running=false},700);
+  },1400);
+}
+
+function scenario2(){
+  if(running)return;running=true;
+  document.getElementById('btn2').disabled=true;document.getElementById('btn3').disabled=true;
+  cMode='weaker';hasShared=true;phase='conflict';setHub('c');
+  setDots(3,'danger');setBadge('⚡ Conflict','conflict');setST('Conflict — reasoning weakened, Oracle adjudicating');
+  resetQCards();addQClass('qmp','lit');addQClass('qcf','lit');addQClass('qcb','remix');addQClass('qma','remix');addQClass('qmp','shared');
+  document.getElementById('verdictCard').className='verdict-card';
+  document.getElementById('verdHead').className='verdict-head';document.getElementById('verdHead').textContent='⚡ Conflict Detected: Reasoning Weakened';
+  document.getElementById('sharedRow').style.display='flex';
+  document.getElementById('sharedTxt').textContent='Shared core retained: memory as misallocated capital — both paths agree on root cause';
+  document.getElementById('oldSc').textContent='0.89';document.getElementById('arrIcon').textContent='→';
+  document.getElementById('newSc').style.color='var(--red)';document.getElementById('newSc').textContent='0.74';
+  document.getElementById('vHold').style.display='';document.getElementById('vHold').textContent='Hold Original Signal (0.89)';
+  document.getElementById('vHold').className='vbtn hold';
+  document.getElementById('vAccept').style.display='';document.getElementById('vAccept').textContent='Accept Remix (0.74)';
+  document.getElementById('vAccept').className='vbtn accept';
+  document.getElementById('vMerge').style.display='';document.getElementById('vMerge').textContent='⚡ Merge Perspectives → 0.93';
+  setRadarBars([['rd1','n','-21%','bn1','nb',71,'bo1',92],['rd2','n','-7%','bn2','nb',82,'bo2',88],['rd3','n','-25%','bn3','nb',64,'bo3',86]]);
+  setConvPanel('0.89 → 0.74','⚡ Conflict','ct','<span class="cs-pill" style="color:var(--blue)">MP</span><span class="cs-pill" style="color:var(--amber)">CF</span><span style="font-size:.6rem;color:var(--muted);padding:0 2px">vs</span><span class="cs-pill" style="color:var(--red)">CB</span><span class="cs-pill" style="color:var(--cyan)">MA</span>','Structural depth −21%, Actionability −25%. Constraint Break loses the ownership thesis. Merge available — shared core found.','cp','cs');
+  addLog('conflict','Conflict triggered — CB × MA remix 0.74 vs 0.89. Shared core: memory misallocation. Merge gate open.');
+  setTimeout(()=>{showVerdict(true);running=false},500);
+}
+
+function scenario3(){
+  if(running)return;running=true;
+  document.getElementById('btn2').disabled=true;document.getElementById('btn3').disabled=true;
+  cMode='stronger';hasShared=false;phase='conflict';setHub('a');
+  setDots(3,'amp');setBadge('⚡ Amplified','amplified');setST('Signal amplified — stronger remix found');
+  resetQCards();addQClass('qmp','lit');addQClass('qcf','lit');addQClass('qma','remix');addQClass('qcb','remix');
+  document.getElementById('verdictCard').className='verdict-card ac';
+  document.getElementById('verdHead').className='verdict-head a';document.getElementById('verdHead').textContent='⚡ Signal Amplified: Stronger Remix Found';
+  document.getElementById('sharedRow').style.display='none';
+  document.getElementById('oldSc').textContent='0.89';document.getElementById('arrIcon').textContent='↑';
+  document.getElementById('newSc').style.color='var(--green)';document.getElementById('newSc').textContent='0.94';
+  document.getElementById('vHold').style.display='none';
+  document.getElementById('vAccept').style.display='';document.getElementById('vAccept').textContent='Accept Stronger Signal (0.94) ↑';
+  document.getElementById('vAccept').className='vbtn amp-acc';
+  document.getElementById('vMerge').style.display='none';
+  setRadarBars([['rd1','p','+12%','bn1','pb',97,'bo1',85],['rd2','p','+18%','bn2','pb',96,'bo2',81],['rd3','p','+8%','bn3','pb',92,'bo3',85]]);
+  setConvPanel('0.94','⚡ Amplified','at','<span class="cs-pill" style="color:var(--cyan)">Micro-Anomaly</span><span class="cs-pill" style="color:var(--red)">Constraint Break</span>','All three axes strengthen. Structural Depth +12%, Novelty +18%, Actionability +8%. Oracle recommends accepting.','ap','as');
+  addLog('amp','Signal amplified — MA × CB scores 0.94. All axes strengthen vs original 0.89. Oracle recommends accept.');
+  setTimeout(()=>{showVerdict(true);running=false},500);
+}
+
+function doHold(){
+  showVerdict(false);phase='resolved-hold';cMode=null;setHub('');
+  resetQCards();addQClass('qmp','lit');addQClass('qcf','lit');
+  setDots(2,'gold');setBadge('Signal Held','hot');setST('Original signal held — 0.89 maintained, remix queued as challenger');
+  setConvPanel('0.89','⚡ Signal Held',null,'<span class="cs-pill" style="color:var(--blue)">Misaligned Pattern</span><span class="cs-pill" style="color:var(--amber)">Compression Failure</span>','Original convergence maintained. Remix queued as secondary hypothesis. Rare-earth ownership thesis stands.','','');
+  addLog('hold','User held 0.89. Remix (0.74) archived as challenger. Training data: depth > novelty in this context.');
+  document.getElementById('btn2').disabled=false;document.getElementById('btn3').disabled=false;
+}
+function doAccept(){
+  const isStr=document.getElementById('newSc').textContent==='0.94';
+  const ns=isStr?'0.94':'0.74';
+  showVerdict(false);phase='resolved-accept';cMode=isStr?'acc-strong':'acc-weak';setHub('');
+  resetQCards();
+  if(isStr){addQClass('qma','lit');addQClass('qcb','lit')}else{addQClass('qcb','lit');addQClass('qma','lit')}
+  setDots(2,isStr?'amp':'gold');setBadge(isStr?'Signal Amplified':'Remix Accepted',isStr?'amplified':'hot');
+  setST(`Remix accepted — ${ns} now active`);
+  setConvPanel(ns,isStr?'⚡ Amplified':'Signal Accepted',isStr?'at':null,isStr?'<span class="cs-pill" style="color:var(--cyan)">Micro-Anomaly</span><span class="cs-pill" style="color:var(--red)">Constraint Break</span>':'<span class="cs-pill" style="color:var(--red)">Constraint Break</span><span class="cs-pill" style="color:var(--cyan)">Micro-Anomaly</span>',isStr?'Stronger remix accepted — all axes up. Product redesign + anomaly routing now drives convergence.':'Remix accepted at 0.74. Previous 0.89 archived.',isStr?'ap':'','');
+  addLog('accept',`User accepted remix ${ns}. Previous signal archived. Training: ${isStr?'user chose structural novelty gains':'user accepted weaker signal — context-dependent'}.`);
+  addHist(ns,isStr?'MA + CB':'CB + MA',isStr?'Product redesign + anomaly routing: stronger action path':'Constraint break + anomaly scanning as primary lens',isStr?'#5dba6e':'#5b9bd5',true);
+  document.getElementById('btn2').disabled=false;document.getElementById('btn3').disabled=false;
+}
+function doMerge(){
+  showVerdict(false);phase='merge';arcT=0;setHub('');
+  resetQCards();['qmp','qcf','qcb','qma'].forEach(id=>addQClass(id,'lit'));
+  setDots(4,'amp');setBadge('⚡ Merge Active','amplified');setST('Merge in progress — synthesising Tier 3 insight');nova();
+  setConvPanel('0.93','⚡ Merged Signal','at','<span class="cs-pill" style="color:var(--blue)">MP</span><span class="cs-pill" style="color:var(--amber)">CF</span><span class="cs-pill" style="color:var(--red)">CB</span><span class="cs-pill" style="color:var(--cyan)">MA</span>','Tier 3 synthesis: shared core (memory misallocation) anchors a closed-loop rare-earth + salvage business model. 0.93 — stronger than either original or remix alone.','ap','as');
+  addLog('merge','Oracle Merge — all 4 sparks synthesised. Tier 3: Closed-loop asset management at 0.93. Shared core was the fusion anchor. Training: merge > hold > accept (this context).');
+  addHist('0.93','ALL × 4','Closed-loop rare-earth ownership + salvage anomaly routing — Tier 3','#5dba6e',true);
+  document.getElementById('btn2').disabled=false;document.getElementById('btn3').disabled=false;
+}
+function doReset(){
+  phase='idle';cMode=null;hasShared=false;arcT=0;running=false;logCnt=0;sigs=[];
+  resetQCards();showVerdict(false);setHub('');
+  setDots(0,'on');setBadge('Idle');setST('Idle — run Scenario 1 to establish a signal');
+  setConvPanel('—','No Signal Yet',null,'<span class="cs-pill" style="color:var(--muted)">Run a scenario</span>','Oracle is idle. Run Scenario 1 to establish the first convergence signal.','','');
+  document.getElementById('histDiv').innerHTML='<div style="font-size:.71rem;color:var(--muted)">No signals yet.</div>';
+  document.getElementById('logDiv').innerHTML='<div style="font-size:.71rem;color:var(--muted)">Decisions will appear here.</div>';
+  document.getElementById('btn1').disabled=false;document.getElementById('btn2').disabled=true;document.getElementById('btn3').disabled=true;
+}
+document.getElementById('hub').addEventListener('click',()=>{if(phase==='idle')scenario1()});
+</script>
+</body>
+</html>
